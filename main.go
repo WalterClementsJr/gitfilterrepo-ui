@@ -4,8 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,8 @@ type GitCommitData struct {
 var (
 	APP    = tview.NewApplication()
 	git, _ = exec.LookPath("git")
+	buf    bytes.Buffer
+	logger = log.New(&buf, "logger: ", log.Lshortfile)
 )
 
 func populateCommitList(list *tview.List) {
@@ -39,22 +42,19 @@ func populateCommitList(list *tview.List) {
 
 	list.SetTitle("Commits").SetBorder(true)
 
-	if err := APP.SetRoot(list, true).SetFocus(list).Run(); err != nil {
-		panic(err)
-	}
+	APP.SetRoot(list, true).SetFocus(list)
 }
-
-var DIR = "/home/walker/personal/temp1"
 
 func updateCommitTime(gcd GitCommitData, list *tview.List) {
 	form := tview.NewForm().
-		AddInputField("Hash", gcd.hash, 20, nil, nil).
-		AddInputField("Date", gcd.date, 20, nil, nil).
-		AddInputField("Message", gcd.message, 20, nil, nil)
+		AddTextView("Hash", gcd.hash, 40, 1, true, false).
+		AddTextView("Message", gcd.message, 40, 1, true, false).
+		AddInputField("Date", gcd.date, 30, nil, nil)
 
 	form.AddButton("Save", func() {
 		dateField := form.GetFormItemByLabel("Date").(*tview.InputField)
 		newDate := dateField.GetText()
+		newDate = parseToGitTimestamp(newDate)
 
 		commandText := fmt.Sprintf(
 			`
@@ -64,16 +64,16 @@ if commit.original_id.startswith(b"%s"):
 `,
 			gcd.hash, newDate, newDate)
 
-		// fmt.Println("command", commandText)
+		command := exec.Command("git", "filter-repo", "--force", "--commit-callback", commandText)
+		output, err := command.Output()
 
-		command := exec.Command(git, commandText)
-		command.Output()
-
-		// if err != nil {
-		// 	println("fuck it failed", err.Error())
-		// } else {
-		// 	println("completed", command.Stdout)
-		// }
+		if err != nil {
+			if ee, ok := err.(*exec.ExitError); ok {
+				log.Println("err is", string(ee.Stderr))
+			}
+		} else {
+			log.Println("completed", string(output))
+		}
 		populateCommitList(list)
 	})
 
@@ -81,21 +81,13 @@ if commit.original_id.startswith(b"%s"):
 		SetTitle("Update commit time").
 		SetTitleAlign(tview.AlignLeft)
 
-	if err := APP.SetRoot(form, true).EnableMouse(true).Run(); err != nil {
-		panic(err)
-	}
+	APP.SetRoot(form, true).EnableMouse(true).Run()
 }
 
 func getGitLog() []GitCommitData {
-	dir := exec.Command("pwd")
-	dir.Dir = DIR
-	dir.Output()
-	fmt.Println(dir.Stdout)
-
-	formatString := "%h|%an|%ai|%s"
+	formatString := "%h|%an|%aI|%s"
 
 	logCommand := exec.Command(git, "log", fmt.Sprintf("--pretty=format:%s", formatString), "--date=short")
-	logCommand.Dir = DIR
 
 	outputByte, err := logCommand.Output()
 	if err != nil {
@@ -122,47 +114,52 @@ func getGitLog() []GitCommitData {
 	return commits
 }
 
-func parseToUnix(d string) string {
-	t, err := time.Parse(time.RFC3339, d)
+func parseToGitTimestamp(dte string) string {
+	log.Println("input", dte)
+
+	t, err := time.Parse(time.RFC3339, dte)
 	if err != nil {
 		panic(err)
 	}
 
 	unix := t.Unix()
-	fmt.Println(unix)
-	return strconv.Itoa(int(unix))
+	_, offsetSeconds := t.Zone()
+	offsetStr := zoneOffsetToString(offsetSeconds)
+
+	data := fmt.Sprintf("%d %s", unix, offsetStr)
+	log.Println("parsed", data, unix, offsetSeconds)
+	return data
+}
+
+func zoneOffsetToString(offsetSeconds int) string {
+	var result string
+
+	hours := offsetSeconds / (60 * 60)
+	minutes := offsetSeconds/60 - hours*60
+
+	if offsetSeconds >= 0 {
+		result = fmt.Sprintf("+%02d%02d", hours, minutes)
+	} else {
+		result = fmt.Sprintf("-%02d%02d", hours, minutes)
+	}
+	return result
 }
 
 func main() {
+	fileName := time.Now().Format("20060102150405.log")
+
+	f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o666)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+	defer f.Close()
+
+	log.SetOutput(f)
+
 	list := tview.NewList()
-	// box := tview.NewBox().SetTitle("Git commit time UI update")
 	populateCommitList(list)
 
-	// 	newDate := "2021-01-01T09:09:09Z"
-	// 	newDate = parseToUnix(newDate)
-	// 	newDate = "1946684799 +0000"
-	//
-	// 	commandText := fmt.Sprintf(
-	// 		`
-	// if commit.original_id.startswith(b"%s"):
-	//   commit.author_date = b"%s";
-	//   commit.committer_date = b"%s";
-	// `,
-	// 		"bcfb922", newDate, newDate)
-	//
-	// 	fmt.Println("command", commandText)
-
-	// command := exec.Command("git", "filter-repo", "--force", "--commit-callback", commandText)
-	// command.Dir = DIR
-	// println("full command:", command.String())
-	// out, err := command.Output()
-	//
-	// if err != nil {
-	// 	if ee, ok := err.(*exec.ExitError); ok {
-	// 		fmt.Println("err is", string(ee.Stderr))
-	// 	}
-	// 	panic(err)
-	// } else {
-	// 	println("completed", string(out))
-	// }
+	if err := APP.SetRoot(list, true).EnableMouse(true).Run(); err != nil {
+		panic(err)
+	}
 }
