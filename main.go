@@ -23,8 +23,6 @@ type GitCommitData struct {
 var (
 	APP    = tview.NewApplication()
 	git, _ = exec.LookPath("git")
-	buf    bytes.Buffer
-	logger = log.New(&buf, "logger: ", log.Lshortfile)
 )
 
 func populateCommitList(list *tview.List) {
@@ -115,8 +113,6 @@ func getGitLog() []GitCommitData {
 }
 
 func parseToGitTimestamp(dte string) string {
-	log.Println("input", dte)
-
 	t, err := time.Parse(time.RFC3339, dte)
 	if err != nil {
 		panic(err)
@@ -127,7 +123,7 @@ func parseToGitTimestamp(dte string) string {
 	offsetStr := zoneOffsetToString(offsetSeconds)
 
 	data := fmt.Sprintf("%d %s", unix, offsetStr)
-	log.Println("parsed", data, unix, offsetSeconds)
+	log.Printf("input %s, unix %d, offset seconds %d is parsed into %s\n", dte, unix, offsetSeconds, data)
 	return data
 }
 
