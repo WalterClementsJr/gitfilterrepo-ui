@@ -22,7 +22,7 @@ type GitCommitData struct {
 
 var (
 	APP    = tview.NewApplication()
-	git, _ = exec.LookPath("git")
+	git, gitErr = exec.LookPath("git")
 )
 
 func populateCommitList(list *tview.List) {
@@ -50,6 +50,9 @@ func updateCommitTime(gcd GitCommitData, list *tview.List) {
 		AddInputField("Date", gcd.date, 30, nil, nil)
 
 	form.AddButton("Save", func() {
+		// backup remotes
+		remotes := getRemoteUrls()
+
 		dateField := form.GetFormItemByLabel("Date").(*tview.InputField)
 		newDate := dateField.GetText()
 		newDate = parseToGitTimestamp(newDate)
@@ -62,16 +65,17 @@ if commit.original_id.startswith(b"%s"):
 `,
 			gcd.hash, newDate, newDate)
 
-		command := exec.Command("git", "filter-repo", "--force", "--commit-callback", commandText)
+		command := exec.Command(git, "filter-repo", "--force", "--commit-callback", commandText)
 		output, err := command.Output()
 
 		if err != nil {
 			if ee, ok := err.(*exec.ExitError); ok {
-				log.Println("err is", string(ee.Stderr))
+				log.Fatalln("err executing filter-repo", string(ee.Stderr))
 			}
 		} else {
 			log.Println("completed", string(output))
 		}
+		setRemote(remotes)
 		populateCommitList(list)
 	})
 
@@ -141,21 +145,67 @@ func zoneOffsetToString(offsetSeconds int) string {
 	return result
 }
 
+func setRemote(remotes map[string]string) {
+	for remote, url := range remotes {
+		setRemoteCmd := exec.Command(git, "remote", "add", remote, url)
+		_, err := setRemoteCmd.Output()
+		if err != nil {
+			log.Panicln(err)
+		} else {
+			log.Printf("set remote %s url %s\n", remote, url)
+		}
+	}
+}
+
+func getRemoteUrls() map[string]string {
+	getRemotesCmd := exec.Command(git, "remote")
+
+	outputByte, err := getRemotesCmd.Output()
+	if err != nil {
+		log.Panicln(err)
+	}
+
+	remotes := make(map[string]string)
+
+	reader := bytes.NewReader(outputByte)
+	scanner := bufio.NewScanner(reader)
+
+	// loop through remotes and get their url
+	for scanner.Scan() {
+		remoteName := scanner.Text()
+
+		getUrlCmd := exec.Command(git, "remote", "get-url", remoteName)
+		outputByte, err := getUrlCmd.Output()
+		if err != nil {
+			log.Panicln(err)
+		}
+		url := string(outputByte)
+		url = strings.TrimSpace(url)
+		log.Printf("remote %s's URL: %s", remoteName, url)
+		remotes[remoteName] = url
+	}
+	return remotes
+}
+
 func main() {
 	fileName := time.Now().Format("20060102150405.log")
 
+	if gitErr != nil {
+		println("command \"git\" not found")
+	}
 	f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o666)
 	if err != nil {
-		log.Fatalf("error opening file: %v", err)
+		println("error opening file for logging", err)
 	}
 	defer f.Close()
 
 	log.SetOutput(f)
 
+	// init UI
 	list := tview.NewList()
 	populateCommitList(list)
 
 	if err := APP.SetRoot(list, true).EnableMouse(true).Run(); err != nil {
-		panic(err)
+		println("error when setting up tview", err)
 	}
 }
